@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minhas Horas - Gestão de Serviços</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        .custom-shadow { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05); }
+        /* Esconder scrollbars mas manter funcionalidade */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+    <!-- APP CONTAINER -->
+    <div id="app" class="min-h-screen">
+        <!-- O conteúdo será renderizado aqui via JavaScript -->
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. ESTADO DA APLICAÇÃO (SIMULANDO BASE DE DADOS)
+        // ==========================================
+        let state = {
+            currentUser: null,
+            users: [
+                { id: '1', name: 'Ana Silva', role: 'prestador', email: 'ana@prestador.com', config: { hourlyRate: 45, transport: 20 }, pendingConfig: null, linkedGroupId: 'GRP-123' },
+                { id: '2', name: 'Carlos (Pai)', role: 'tomador', email: 'carlos@pai.com', groupId: 'GRP-123' },
+                { id: '3', name: 'Admin do Sistema', role: 'admin', email: 'admin@sistema.com' }
+            ],
+            records: [
+                { id: 'r1', providerId: '1', groupId: 'GRP-123', date: '2026-04-25', type: 'WORK', startTime: '14:00', endTime: '18:00', hours: 4, amount: 180, transport: 20, status: 'PAGO' },
+                { id: 'r4', providerId: '1', groupId: 'GRP-123', date: '2026-04-27', type: 'WORK', startTime: '09:00', endTime: '12:00', hours: 3, amount: 135, transport: 20, status: 'PENDENTE' }
+            ],
+            activeTimer: null, // Objeto { startTime: Date, startTimeStr: String }
+            currentView: 'login'
+        };
+
+        // ==========================================
+        // 2. UTILITÁRIOS
+        // ==========================================
+        const formatCurrency = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
+        
+        const formatDate = (dateStr) => {
+            const [y, m, d] = dateStr.split('-');
+            return `${d}/${m}/${y}`;
+        };
+
+        const calculateDuration = (start) => {
+            if (!start) return "00:00:00";
+            const diff = Math.floor((new Date() - start) / 1000);
+            const h = Math.floor(diff / 3600).toString().padStart(2, '0');
+            const m = Math.floor((diff % 3600) / 60).toString().padStart(2, '0');
+            const s = (diff % 60).toString().padStart(2, '0');
+            return `${h}:${m}:${s}`;
+        };
+
+        // ==========================================
+        // 3. LÓGICA DE NEGÓCIO
+        // ==========================================
+        function navigate(view) {
+            state.currentView = view;
+            render();
+        }
+
+        function login(userId) {
+            state.currentUser = state.users.find(u => u.id === userId);
+            state.currentView = 'dashboard';
+            render();
+        }
+
+        function logout() {
+            state.currentUser = null;
+            state.currentView = 'login';
+            state.activeTimer = null;
+            render();
+        }
+
+        function startClock() {
+            const now = new Date();
+            state.activeTimer = {
+                startTime: now,
+                startTimeStr: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
+            render();
+        }
+
+        function stopClock() {
+            const end = new Date();
+            const start = state.activeTimer.startTime;
+            const diffHrs = (end - start) / (1000 * 60 * 60);
+            
+            const rate = state.currentUser.config.hourlyRate;
+            const trans = state.currentUser.config.transport;
+            const total = (diffHrs * rate) + trans;
+
+            const newRecord = {
+                id: 'r' + Date.now(),
+                providerId: state.currentUser.id,
+                groupId: state.currentUser.linkedGroupId,
+                date: end.toISOString().split('T')[0],
+                startTime: state.activeTimer.startTimeStr,
+                endTime: end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                hours: parseFloat(diffHrs.toFixed(2)),
+                transport: trans,
+                amount: parseFloat(total.toFixed(2)),
+                status: 'PENDENTE'
+            };
+
+            state.records.unshift(newRecord);
+            state.activeTimer = null;
+            navigate('extrato');
+        }
+
+        // ==========================================
+        // 4. COMPONENTES DE INTERFACE
+        // ==========================================
+        
+        function renderSidebar() {
+            const items = [
+                { view: 'dashboard', label: 'Dashboard', icon: 'layout-grid', roles: ['prestador', 'tomador', 'admin'] },
+                { view: 'admin', label: 'Painel Admin', icon: 'shield-check', roles: ['admin'] },
+                { view: 'registro', label: 'Bater Ponto', icon: 'clock', roles: ['prestador'] },
+                { view: 'extrato', label: 'Extrato', icon: 'file-text', roles: ['prestador', 'tomador', 'admin'] },
+                { view: 'aprovacoes', label: 'Aprovações', icon: 'check-circle', roles: ['tomador'] },
+                { view: 'config', label: 'Meus Valores', icon: 'settings', roles: ['prestador'] }
+            ].filter(i => i.roles.includes(state.currentUser.role));
+
+            return `
+                <aside class="w-full md:w-64 bg-slate-900 text-white p-6 flex flex-col shrink-0">
+                    <div class="flex items-center gap-3 mb-10 px-2 font-black text-lg">
+                        <div class="bg-indigo-600 p-2 rounded-lg text-white"><i data-lucide="clock" class="w-5 h-5"></i></div>
+                        <span>MINHAS HORAS</span>
+                    </div>
+                    <nav class="flex-1 space-y-2">
+                        ${items.map(item => `
+                            <button onclick="navigate('${item.view}')" class="w-full text-left p-3 rounded-xl flex items-center gap-3 transition-all ${state.currentView === item.view ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}">
+                                <i data-lucide="${item.icon}" class="w-4 h-4"></i>
+                                <span class="font-medium text-sm">${item.label}</span>
+                            </button>
+                        `).join('')}
+                    </nav>
+                    <div class="pt-6 border-t border-slate-800 space-y-4">
+                        <div class="text-xs">
+                            <p class="font-bold">${state.currentUser.name}</p>
+                            <p class="text-slate-500 uppercase tracking-tighter">${state.currentUser.role}</p>
+                        </div>
+                        <button onclick="logout()" class="text-rose-400 flex items-center gap-2 text-sm font-bold hover:text-rose-300 transition-colors">
+                            <i data-lucide="log-out" class="w-4 h-4"></i> Sair
+                        </button>
+                    </div>
+                </aside>
+            `;
+        }
+
+        const Views = {
+            login: () => `
+                <div class="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+                    <div class="w-full max-w-md bg-white rounded-3xl shadow-xl overflow-hidden mb-6">
+                        <div class="p-10 text-center bg-indigo-600 text-white">
+                            <i data-lucide="clock" class="w-12 h-12 mx-auto mb-4"></i>
+                            <h1 class="text-3xl font-bold tracking-tight">Minhas Horas</h1>
+                        </div>
+                        <div class="p-8 space-y-4">
+                            <button onclick="login('1')" class="w-full border-2 border-slate-200 hover:border-indigo-300 p-6 rounded-2xl transition-all group flex items-center text-left">
+                                <div class="bg-indigo-100 p-3 rounded-xl mr-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                                    <i data-lucide="user" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <p class="font-bold text-slate-800">Sou Prestador</p>
+                                    <p class="text-xs text-slate-500">Lançar horas e gerir valores</p>
+                                </div>
+                            </button>
+                            <button onclick="login('2')" class="w-full border-2 border-slate-200 hover:border-emerald-300 p-6 rounded-2xl transition-all group flex items-center text-left">
+                                <div class="bg-emerald-100 p-3 rounded-xl mr-4 group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                                    <i data-lucide="users" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <p class="font-bold text-slate-800">Sou Tomador</p>
+                                    <p class="text-xs text-slate-500">Aprovar horas e valores</p>
+                                </div>
+                            </button>
+                            <div class="pt-4 border-t border-slate-100">
+                                <button onclick="login('3')" class="w-full text-[10px] text-slate-400 hover:text-slate-600 uppercase font-bold tracking-widest flex justify-center items-center gap-2">
+                                    <i data-lucide="shield-check" class="w-3 h-3"></i> Acesso Restrito Admin
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `,
+
+            dashboard: () => {
+                const userRecords = state.currentUser.role === 'tomador' 
+                    ? state.records.filter(r => r.groupId === state.currentUser.groupId)
+                    : state.currentUser.role === 'admin' ? state.records : state.records.filter(r => r.providerId === state.currentUser.id);
+
+                const pending = userRecords.filter(r => r.status === 'PENDENTE').reduce((s, r) => s + r.amount, 0);
+                const approved = userRecords.filter(r => r.status === 'APROVADO' || r.status === 'PAGO').reduce((s, r) => s + r.amount, 0);
+
+                return `
+                    <div class="space-y-8">
+                        <header>
+                            <h1 class="text-2xl font-bold text-slate-800">Painel Financeiro</h1>
+                            <p class="text-slate-500">Resumo da sua atividade atual.</p>
+                        </header>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+                                <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Aguardando Aprovação</p>
+                                <p class="text-4xl font-black text-amber-500">${formatCurrency(pending)}</p>
+                            </div>
+                            <div class="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
+                                <p class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Total Aprovado/Pago</p>
+                                <p class="text-4xl font-black text-emerald-500">${formatCurrency(approved)}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            registro: () => `
+                <div class="max-w-md mx-auto space-y-6 text-center">
+                    <header class="mb-10 text-left">
+                        <h1 class="text-2xl font-bold text-slate-800">Registro de Ponto</h1>
+                        <p class="text-slate-500">Contabilize sua jornada em tempo real.</p>
+                    </header>
+
+                    <div id="clock-display" class="p-10 rounded-full w-72 h-72 mx-auto flex flex-col items-center justify-center border-8 transition-all shadow-inner bg-white ${state.activeTimer ? 'border-indigo-500' : 'border-slate-100'}">
+                        ${state.activeTimer ? `
+                            <p class="text-indigo-600 font-bold uppercase text-[10px] tracking-widest mb-2">Cronómetro Ativo</p>
+                            <p id="timer-text" class="text-5xl font-black text-slate-800 font-mono tracking-tighter">00:00:00</p>
+                            <p class="text-xs text-slate-400 mt-2">Início: ${state.activeTimer.startTimeStr}</p>
+                        ` : `
+                            <i data-lucide="clock" class="w-12 h-12 text-slate-200 mb-4"></i>
+                            <p class="text-slate-400 font-medium">Pronto para começar</p>
+                        `}
+                    </div>
+
+                    <div class="pt-8 space-y-4">
+                        ${!state.activeTimer ? `
+                            <button onclick="startClock()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-5 text-lg rounded-2xl font-bold flex justify-center items-center gap-3">
+                                <i data-lucide="play" class="fill-current w-5 h-5"></i> Iniciar Jornada
+                            </button>
+                        ` : `
+                            <button onclick="stopClock()" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-5 text-lg rounded-2xl font-bold flex justify-center items-center gap-3">
+                                <i data-lucide="square" class="fill-current w-5 h-5"></i> Encerrar e Lançar
+                            </button>
+                        `}
+                    </div>
+                    
+                    <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200 mt-6 text-left flex gap-4 items-start">
+                        <div class="bg-white p-2 rounded-lg shadow-sm text-indigo-600"><i data-lucide="dollar-sign" class="w-5 h-5"></i></div>
+                        <div>
+                            <p class="text-xs text-slate-900 font-bold uppercase mb-1 text-[10px]">Taxas Atuais</p>
+                            <p class="text-sm text-slate-700 leading-tight">
+                                <strong>${formatCurrency(state.currentUser.config?.hourlyRate)}/h</strong> + <strong>${formatCurrency(state.currentUser.config?.transport)}</strong> transporte.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            `,
+
+            extrato: () => {
+                const role = state.currentUser.role;
+                const userRecords = role === 'tomador' 
+                    ? state.records.filter(r => r.groupId === state.currentUser.groupId)
+                    : role === 'admin' ? state.records : state.records.filter(r => r.providerId === state.currentUser.id);
+
+                return `
+                    <div class="max-w-4xl space-y-6">
+                        <header>
+                            <h1 class="text-2xl font-bold text-slate-800">Extrato de Lançamentos</h1>
+                            <p class="text-slate-500">Histórico detalhado de serviços.</p>
+                        </header>
+                        <div class="bg-white rounded-3xl border border-slate-100 overflow-hidden shadow-sm overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead class="bg-slate-50 border-b border-slate-100">
+                                    <tr class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                        <th class="p-4">Status</th>
+                                        <th class="p-4">Data ${role !== 'prestador' ? '/ Prestador' : ''}</th>
+                                        <th class="p-4">Horário</th>
+                                        <th class="p-4 text-right">Horas</th>
+                                        <th class="p-4 text-right">Valor Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    ${userRecords.map(r => {
+                                        const p = state.users.find(u => u.id === r.providerId);
+                                        const statusColors = {
+                                            'PENDENTE': 'bg-amber-100 text-amber-700 border-amber-200',
+                                            'APROVADO': 'bg-blue-100 text-blue-700 border-blue-200',
+                                            'PAGO': 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                                            'REJEITADO': 'bg-rose-100 text-rose-700 border-rose-200'
+                                        };
+                                        return `
+                                            <tr class="hover:bg-slate-50 transition-colors">
+                                                <td class="p-4"><span class="px-2 py-0.5 rounded-full text-[9px] font-bold border ${statusColors[r.status]}">${r.status}</span></td>
+                                                <td class="p-4">
+                                                    <p class="font-bold text-slate-700">${formatDate(r.date)}</p>
+                                                    ${role !== 'prestador' ? `<p class="text-[10px] text-indigo-600 font-medium">${p?.name}</p>` : ''}
+                                                </td>
+                                                <td class="p-4 text-xs text-slate-500">${r.startTime} - ${r.endTime}</td>
+                                                <td class="p-4 text-right font-medium text-sm">${r.hours}h</td>
+                                                <td class="p-4 text-right">
+                                                    <p class="font-bold text-slate-800">${formatCurrency(r.amount)}</p>
+                                                </td>
+                                            </tr>
+                                        `;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            },
+
+            aprovacoes: () => {
+                const pending = state.records.filter(r => r.groupId === state.currentUser.groupId && r.status === 'PENDENTE');
+                return `
+                    <div class="max-w-4xl space-y-6">
+                        <header>
+                            <h1 class="text-2xl font-bold text-slate-800">Aprovações Pendentes</h1>
+                            <p class="text-slate-500">Revise os lançamentos feitos pelos seus prestadores.</p>
+                        </header>
+                        <div class="space-y-4">
+                            ${pending.length === 0 ? `<p class="text-slate-400 italic bg-white p-10 rounded-3xl border border-dashed text-center">Nenhuma aprovação pendente no momento.</p>` : 
+                                pending.map(r => {
+                                    const p = state.users.find(u => u.id === r.providerId);
+                                    return `
+                                        <div class="bg-white p-5 rounded-2xl border border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4 shadow-sm">
+                                            <div class="flex items-center gap-4 w-full">
+                                                <div class="bg-indigo-50 p-3 rounded-xl text-indigo-600"><i data-lucide="user" class="w-6 h-6"></i></div>
+                                                <div>
+                                                    <p class="font-bold text-slate-800">${formatDate(r.date)} • ${p?.name}</p>
+                                                    <p class="text-xs text-slate-500">${r.hours}h (${r.startTime}-${r.endTime}) • Total: ${formatCurrency(r.amount)}</p>
+                                                </div>
+                                            </div>
+                                            <div class="flex gap-2 w-full md:w-auto">
+                                                <button onclick="updateRecordStatus('${r.id}', 'REJEITADO')" class="flex-1 md:flex-none p-3 text-rose-600 hover:bg-rose-50 rounded-xl border border-rose-100"><i data-lucide="x" class="w-5 h-5 mx-auto"></i></button>
+                                                <button onclick="updateRecordStatus('${r.id}', 'APROVADO')" class="flex-1 md:flex-none bg-emerald-500 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-600 flex items-center justify-center gap-2 transition-colors">
+                                                    <i data-lucide="check" class="w-5 h-5"></i> Aprovar
+                                                </button>
+                                            </div>
+                                        </div>
+                                    `;
+                                }).join('')
+                            }
+                        </div>
+                    </div>
+                `;
+            },
+
+            admin: () => `
+                <div class="space-y-8">
+                    <header>
+                        <h1 class="text-2xl font-bold text-slate-800">Consola Admin</h1>
+                        <p class="text-slate-500">Gestão de sistema e auditoria global.</p>
+                    </header>
+                    <div class="bg-white rounded-3xl border border-slate-100 overflow-hidden shadow-sm">
+                        <table class="w-full text-left">
+                            <thead class="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                <tr>
+                                    <th class="p-4">Utilizador</th>
+                                    <th class="p-4">Perfil</th>
+                                    <th class="p-4">E-mail</th>
+                                    <th class="p-4 text-right">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                ${state.users.map(u => `
+                                    <tr>
+                                        <td class="p-4 font-bold text-slate-700">${u.name}</td>
+                                        <td class="p-4"><span class="px-2 py-1 bg-slate-100 text-[10px] font-black rounded uppercase">${u.role}</span></td>
+                                        <td class="p-4 text-sm text-slate-500">${u.email}</td>
+                                        <td class="p-4 text-right">
+                                            <button class="text-slate-300 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `,
+            config: () => `
+                <div class="max-w-md space-y-6">
+                    <header>
+                        <h1 class="text-2xl font-bold text-slate-800">Meus Valores</h1>
+                        <p class="text-slate-500">Gerencie sua remuneração.</p>
+                    </header>
+                    <div class="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm space-y-6">
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-bold text-slate-400 uppercase">Valor da Hora (R$)</label>
+                            <input type="number" class="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-lg" value="${state.currentUser.config.hourlyRate}" />
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-bold text-slate-400 uppercase">Transporte Diário (R$)</label>
+                            <input type="number" class="w-full p-4 bg-slate-50 border rounded-2xl outline-none font-bold text-lg" value="${state.currentUser.config.transport}" />
+                        </div>
+                        <button onclick="alert('Funcionalidade de solicitação de alteração em processamento...')" class="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold shadow-lg shadow-indigo-100">Salvar Alterações</button>
+                    </div>
+                </div>
+            `
+        };
+
+        // ==========================================
+        // 5. MOTOR DE RENDERIZAÇÃO
+        // ==========================================
+        function updateRecordStatus(id, newStatus) {
+            const record = state.records.find(r => r.id === id);
+            if (record) {
+                record.status = newStatus;
+                render();
+            }
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            
+            if (state.currentView === 'login') {
+                app.innerHTML = Views.login();
+            } else {
+                app.innerHTML = `
+                    <div class="min-h-screen bg-slate-50 flex flex-col md:flex-row">
+                        ${renderSidebar()}
+                        <main class="flex-1 p-6 md:p-12 overflow-y-auto no-scrollbar">
+                            ${Views[state.currentView] ? Views[state.currentView]() : '<h1>View não encontrada</h1>'}
+                        </main>
+                    </div>
+                `;
+            }
+
+            // Inicializar ícones Lucide
+            lucide.createIcons();
+        }
+
+        // Timer em tempo real
+        setInterval(() => {
+            if (state.activeTimer && state.currentView === 'registro') {
+                const timerText = document.getElementById('timer-text');
+                if (timerText) {
+                    timerText.innerText = calculateDuration(state.activeTimer.startTime);
+                }
+            }
+        }, 1000);
+
+        // Iniciar
+        render();
+
+    </script>
+</body>
+</html>
